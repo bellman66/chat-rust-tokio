@@ -3,11 +3,18 @@ extern crate tokio_tungstenite;
 
 use log::info;
 use std::{env};
+use std::collections::HashMap;
 use std::fmt::Error;
 use std::net::{IpAddr, SocketAddr};
+use std::sync::{Arc, Mutex};
 use tokio::net::{TcpListener, TcpStream};
 use futures_util::{future, StreamExt, TryStreamExt};
-use tokio_tungstenite::tungstenite::WebSocket;
+use tokio::sync::mpsc::UnboundedSender;
+use tokio_tungstenite::tungstenite::{Message, WebSocket};
+use uuid::Uuid;
+
+type Tx = UnboundedSender<Message>;
+type ClientMap = Arc<Mutex<HashMap<Uuid, Tx>>>;
 
 static DEFAULT_ADDR: &str = "127.0.0.1";
 static DEFAULT_PORT: u16 = 9999;
@@ -21,11 +28,13 @@ async fn main() -> Result<(), Error>{
 
     let socket_addr = SocketAddr::new(ip, DEFAULT_PORT);
 
+    let clientMap:ClientMap = Arc::new(Mutex::new(HashMap::new()));
+
     let listener = TcpListener::bind(&socket_addr).await.expect("Not Bind to addr");
     while let res = listener.accept().await {
         match res {
             Ok((stream, _)) => {
-                tokio::spawn(handle_connection(stream));
+                tokio::spawn(handle_connection(clientMap.clone(), stream, Uuid::new_v4()));
             },
             Err(_) => { panic!("stream match error"); }
         }
@@ -34,14 +43,14 @@ async fn main() -> Result<(), Error>{
     Ok(())
 }
 
-async fn handle_connection(stream: TcpStream) {
+async fn handle_connection(client_map: ClientMap, stream: TcpStream, id: Uuid) {
     let addr = stream.peer_addr().expect("connect failed");
     let websocket = tokio_tungstenite::accept_async(stream)
         .await
         .expect("Error during the websocket handshake occurred");
 
     // Log Info
-    info!("New Client In : {}", addr);
+    println!("New Client In : {}", addr);
 
     let (writer, reader) = websocket.split();
     reader.try_filter(|msg| future::ready(msg.is_text() || msg.is_binary()))
