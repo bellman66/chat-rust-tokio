@@ -59,8 +59,8 @@ async fn handle_connection(stream: TcpStream, title: i32, mut arc: ClientMap) {
     guard.insert(title, writer);
     println!("guard Test");
 
-    reader.try_filter(|msg| future::ready(msg.is_text() || msg.is_binary()))
-        .forward(writer)
-        .await
-        .expect("Failed to forward messages")
+    // reader.try_filter(|msg| future::ready(msg.is_text() || msg.is_binary()))
+    //     .forward(writer)
+    //     .await
+    //     .expect("Failed to forward messages")
 }
