@@ -8,14 +8,15 @@ use std::fmt::Error;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use tokio::net::{TcpListener, TcpStream};
-use futures_util::{future, StreamExt, TryStreamExt};
-use futures_util::stream::{SplitSink, SplitStream};
-use tokio_tungstenite::tungstenite::{Message, WebSocket};
-use tokio_tungstenite::WebSocketStream;
+use futures_util::{StreamExt, TryStreamExt};
+use futures_channel::mpsc::{unbounded, UnboundedSender};
+use tokio_tungstenite::tungstenite::{Message};
 
 static DEFAULT_ADDR: &str = "127.0.0.1";
 static DEFAULT_PORT: u16 = 9999;
-type ClientMap = Arc<Mutex<HashMap<i32, SplitSink<WebSocketStream<TcpStream>, Message>>>>;
+
+type Tx = UnboundedSender<Message>;
+type ClientMap = Arc<Mutex<HashMap<i32, Tx>>>;
 
 #[tokio::main]
 async fn main() -> Result<(), Error>{
@@ -43,24 +44,29 @@ async fn main() -> Result<(), Error>{
     Ok(())
 }
 
-async fn handle_connection(stream: TcpStream, title: i32, mut arc: ClientMap) {
+async fn handle_connection(stream: TcpStream, title: i32, mut clientMap: ClientMap) {
     let addr = stream.peer_addr().expect("connect failed");
     let websocket = tokio_tungstenite::accept_async(stream)
         .await
         .expect("Error during the websocket handshake occurred");
 
     // Log Info
-    info!("New Client In : {}", addr);
+    info!("WebSocket Client In : {}", addr);
+
+    // Insert peer
+    let (tx, rx) = unbounded::<Message>();
+    clientMap.lock().unwrap().insert(title, tx);
 
     let (writer, reader) = websocket.split();
 
-    // Insert Writer
-    let mut guard = arc.lock().unwrap();
-    guard.insert(title, writer);
-    println!("guard Test");
+    let _ = reader.try_for_each(|msg| {
+        println!("Recevie Message : {}", msg.to_text().unwrap());
 
-    // reader.try_filter(|msg| future::ready(msg.is_text() || msg.is_binary()))
-    //     .forward(writer)
-    //     .await
-    //     .expect("Failed to forward messages")
+        let clients = clientMap.lock().unwrap();
+        let broadcast_iter = clients.iter().map(|(_, ws_sink)| ws_sink);
+
+        for recp  in broadcast_iter {
+            recp.unbounded_send(msg.clone()).unwrap();
+        }
+    });
 }
