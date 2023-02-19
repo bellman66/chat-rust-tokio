@@ -6,9 +6,10 @@ use std::{env};
 use std::collections::HashMap;
 use std::fmt::Error;
 use std::net::{IpAddr, SocketAddr};
+use std::str::from_utf8;
 use std::sync::{Arc, Mutex};
 use tokio::net::{TcpListener, TcpStream};
-use futures_util::{StreamExt, TryStreamExt};
+use futures_util::{future, pin_mut, StreamExt, TryStreamExt};
 use futures_channel::mpsc::{unbounded, UnboundedSender};
 use tokio_tungstenite::tungstenite::{Message};
 
@@ -34,8 +35,8 @@ async fn main() -> Result<(), Error>{
     while let res = listener.accept().await {
         match res {
             Ok((stream, _)) => {
-                let title = cnt.clone() + 1;
-                tokio::spawn(handle_connection(stream, title, clientMap.clone()));
+                cnt += 1;
+                tokio::spawn(handle_connection(stream, cnt, clientMap.clone()));
             },
             Err(_) => { panic!("stream match error"); }
         }
@@ -51,7 +52,7 @@ async fn handle_connection(stream: TcpStream, title: i32, mut clientMap: ClientM
         .expect("Error during the websocket handshake occurred");
 
     // Log Info
-    info!("WebSocket Client In : {}", addr);
+    println!("WebSocket Client In : {} / {}", addr, title);
 
     // Insert peer
     let (tx, rx) = unbounded::<Message>();
@@ -59,14 +60,27 @@ async fn handle_connection(stream: TcpStream, title: i32, mut clientMap: ClientM
 
     let (writer, reader) = websocket.split();
 
-    let _ = reader.try_for_each(|msg| {
+    let broadcast_incoming  = reader.try_for_each(|msg| {
         println!("Recevie Message : {}", msg.to_text().unwrap());
 
         let clients = clientMap.lock().unwrap();
         let broadcast_iter = clients.iter().map(|(_, ws_sink)| ws_sink);
 
+        let mut send_msg = String::from(title.to_string());
+        send_msg.push_str(" : ");
+        send_msg.push_str(msg.to_string().as_str());
+
         for recp  in broadcast_iter {
-            recp.unbounded_send(msg.clone()).unwrap();
+            recp.unbounded_send(Message::text(&send_msg)).unwrap();
         }
+
+        future::ok(())
     });
+
+    let receive_from_other = rx.map(Ok).forward(writer);
+    pin_mut!(broadcast_incoming, receive_from_other);
+    future::select(broadcast_incoming, receive_from_other).await;
+
+    println!("{} disconnected", &addr);
+    clientMap.lock().unwrap().remove(&title);
 }
